@@ -1,4 +1,4 @@
-# OpenVPN Access Server on Azure (Bicep)
+# OpenVPN Access Server Deployment on Microsoft Azure Using Bicep
 
 Deploys an Ubuntu 26.04 LTS Arm64 VM on Azure and installs OpenVPN Access Server with the official install script. On first boot, cloud-init also sets the Access Server hostname to the VM's public IP and requests a Let's Encrypt short-lived IP certificate through the Access Server ACME client.
 
