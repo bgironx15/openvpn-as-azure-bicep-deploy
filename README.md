@@ -16,8 +16,9 @@ Deploys an Ubuntu 26.04 LTS Arm64 VM on Azure and installs OpenVPN Access Server
 
 | File | Purpose |
 |---|---|
+| `README.md` | Project documentation |
 | `main.bicep` | The template |
-| `main.bicepparam` | Example parameters with placeholders (committed) |
+| `main.bicepparam` | Example parameters with placeholders |
 
 ## Prerequisites
 
