@@ -49,7 +49,7 @@ Deploys an Ubuntu 26.04 LTS Arm64 VM on Azure and installs OpenVPN Access Server
 | `adminSourceCidr` | empty | Your public IP as a `/32`; swap it into the SSH and 943 rules to restrict them |
 | `dnsLabel` | generated | Must be unique in the region |
 | `asVersion` | `3.2.4` | Passed to the install script |
-| `admin_pw` | empty | Password for the `openvpn` admin user. If empty, the auto-generated password is kept and written to `/var/log/as-setup.log` |
+| `admin_password` | (required) | Password for the `openvpn` admin user, passed to Access Server as `admin_pw` in the VM user data |
 | `imageReference` | Canonical `ubuntu-26_04-lts` / `server-arm64` | Override if the offer or SKU differs |
 
 ## Security
