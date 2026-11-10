@@ -12,6 +12,10 @@ param namePrefix string = 'openvpn-as'
 @description('VM size. Standard_D2pls_v6 is Arm64 (Azure Cobalt 100), so the image must be an Arm64 image.')
 param vmSize string = 'Standard_D2pls_v6'
 
+@description('Linux hostname of the VM (the OS name, not the Azure resource name).')
+@maxLength(64)
+param hostname string = 'openvpnas3'
+
 @description('Admin username for SSH.')
 param adminUsername string = 'azureuser'
 
@@ -29,9 +33,10 @@ param dnsLabel string = toLower('${namePrefix}-${uniqueString(resourceGroup().id
 @description('Access Server version passed to the install script.')
 param asVersion string = '3.2.4'
 
-@description('Password for the openvpn admin user. Leave empty to keep the auto-generated password (written to /var/log/as-setup.log).')
+@description('Password for the openvpn admin user (required). Passed to Access Server as admin_pw in the VM user data.')
 @secure()
-param admin_pw string = ''
+@minLength(1)
+param admin_password string
 
 @description('Ubuntu Arm64 image reference. Verify with: az vm image list --publisher Canonical --offer ubuntu-26_04 --architecture Arm64 --all -o table')
 param imageReference object = {
@@ -47,10 +52,10 @@ var nsgName = '${namePrefix}-nsg'
 var pipName = '${namePrefix}-pip'
 var nicName = '${namePrefix}-nic'
 var vmName = '${namePrefix}-vm'
-var fqdn = '${dnsLabel}.${location}.cloudapp.azure.com'
 
-// {0} = AS version, {1} = VM public IP (used for host.name and the Let's Encrypt IP certificate),
-// {2} = admin_pw, base64-encoded so any characters survive YAML and shell quoting (empty if not set)
+// {0} = AS version, {1} = VM public IP (used for host.name and the Let's Encrypt IP certificate)
+// The openvpn password is not handled here: it goes in the VM user data (see the vm resource),
+// which ovpn-init reads as admin_pw=<password>.
 // Everything runs from one script so it executes in order and logs to /var/log/as-setup.log.
 var cloudInit = format('''#cloud-config
 package_update: true
@@ -61,30 +66,31 @@ write_files:
     permissions: '0700'
     content: |
       #!/bin/bash
-      umask 077
+      touch /var/log/as-setup.log && chmod 600 /var/log/as-setup.log
       exec > >(tee -a /var/log/as-setup.log) 2>&1
       bash <(curl -fsS https://packages.openvpn.net/as/install.sh) --as-version={0} --yes
-      export PATH="$PATH:/usr/local/openvpn_as/scripts"
-      for i in $(seq 1 60); do sacli status 2>/dev/null | grep -q '"api": "on"' && break; sleep 2; done
+      export PATH="$PATH:/usr/local/openvpn_as/bin:/usr/local/openvpn_as/scripts"
+      ovpn-init --azure --batch --force
+      apt-mark hold openvpn-as
+      . /usr/local/openvpn_as/etc/VERSION
+      echo "OpenVPN Access Server Appliance $AS_VERSION \n \l" > /etc/issue
+      cat > /etc/update-motd.d/00-header <<HEADER
+      #!/bin/sh
+      echo "Welcome to OpenVPN Access Server Appliance $AS_VERSION"
+      HEADER
+      chmod 755 /etc/update-motd.d/00-header
+      until sacli status 2>/dev/null | grep -q '"api": "on"'; do sleep 2; done
       sacli --key "host.name" --value "{1}" ConfigPut
       sacli --key "acme.ip_addresses.0" --value "{1}" ConfigPut
       sacli --key "acme.cert_profile" --value "shortlived" ConfigPut
       sacli start
-      for i in $(seq 1 60); do sacli status 2>/dev/null | grep -q '"api": "on"' && break; sleep 2; done
-      ADMIN_PW="$(echo '{2}' | base64 -d)"
-      if [ -n "$ADMIN_PW" ]; then
-        sacli --user openvpn --new_pass "$ADMIN_PW" SetLocalPassword >/dev/null && echo "openvpn password set from admin_pw parameter"
-      else
-        echo "admin_pw not set, using the auto-generated openvpn password:"
-        grep -i 'Auto-generated pass = .*' /usr/local/openvpn_as/init.log
-      fi
-      unset ADMIN_PW
+      until sacli status 2>/dev/null | grep -q '"api": "on"'; do sleep 2; done
       echo y | sacli AcmeRegisterAccount
       sacli AcmeRequestCertificate
       exit 0
 runcmd:
   - [ /usr/local/sbin/as-setup.sh ]
-''', asVersion, pip.properties.ipAddress, base64(admin_pw))
+''', asVersion, pip.properties.ipAddress)
 
 resource nsg 'Microsoft.Network/networkSecurityGroups@2025-05-01' = {
   name: nsgName
@@ -218,11 +224,13 @@ resource vm 'Microsoft.Compute/virtualMachines@2025-04-01' = {
   name: vmName
   location: location
   properties: {
+    // Access Server reads admin_pw from the VM user data during ovpn-init.
+    userData: base64('admin_pw=${admin_password}')
     hardwareProfile: {
       vmSize: vmSize
     }
     osProfile: {
-      computerName: take(replace(vmName, '_', '-'), 15)
+      computerName: hostname
       adminUsername: adminUsername
       customData: base64(cloudInit)
       linuxConfiguration: {
@@ -260,4 +268,9 @@ resource vm 'Microsoft.Compute/virtualMachines@2025-04-01' = {
 output publicIp string = pip.properties.ipAddress
 output adminWebUi string = 'https://${pip.properties.ipAddress}:943/admin'
 output clientWebUi string = 'https://${pip.properties.ipAddress}/'
-output sshCommand string = 'ssh ${adminUsername}@${publicIp}'
+output sshCommand string = 'ssh ${adminUsername}@${pip.properties.ipAddress}'
+
+// The password is shown here in plain text and is kept in the deployment history,
+// readable by anyone with Reader access to the resource group.
+#disable-next-line outputs-should-not-contain-secrets
+output adminPassword string = admin_password
